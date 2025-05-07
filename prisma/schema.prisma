@@ -18,8 +18,10 @@ model User {
   Authenticator Authenticator[]
   SshCredential SshCredential[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+  SelfHostItems        SelfHostItems[]
+  SelfHostLinkCategory SelfHostLinkCategory[]
 }
 
 model Account {
@@ -88,6 +90,30 @@ model SshCredential {
   password String
   host     String
   port     Int
+
+  @@unique([userId, name]) // Optional: ensure unique name per user
+}
+
+model SelfHostLinkCategory {
+  id       String          @id @default(cuid())
+  User     User            @relation(fields: [userId], references: [id])
+  userId   String
+  name     String // Add this line for a display name
+  iconPath String
+  Items    SelfHostItems[]
+
+  @@unique([userId, name]) // Optional: ensure unique name per user
+}
+
+model SelfHostItems {
+  id                     String                @id @default(cuid())
+  User                   User                  @relation(fields: [userId], references: [id])
+  userId                 String
+  name                   String // Add this line for a display name
+  url                    String
+  iconPath               String
+  SelfHostLinkCategory   SelfHostLinkCategory? @relation(fields: [selfHostLinkCategoryId], references: [id])
+  selfHostLinkCategoryId String? // Make this field optional
 
   @@unique([userId, name]) // Optional: ensure unique name per user
 }

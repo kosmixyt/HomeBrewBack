@@ -11,6 +11,7 @@ import { SshClientRequest } from './ws/Sshconnection';
 import { getSessionFromRequest } from './utils/session';
 import { sshRouter } from './routes/ssh/route'; // Import the sshRouter
 import { sftpRouter } from './routes/ssh/sftp'; // Import the sftpRouter
+import { router as linksRouter } from './routes/links'; // Import the linksRouter
 
 dotenv.config();
 
@@ -90,10 +91,12 @@ io.of("/ssh").on("connection", async (socket) => {
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+app.use('/uploads', express.static('uploads')); // Serve static files from the public directory
 app.use('/users', userRoutes);
 app.use("/auth/*", ExpressAuth(authConfig));
 app.use('/api/ssh-credentials', sshRouter); // Add this line to mount the SSH credentials API
 app.use('/api/sftp', sftpRouter); // Add this line to mount the SFTP API
+app.use('/api/links', linksRouter); // Add this line to mount the Links API
 
 app.get('/', (req, res) => res.send('Express + TypeScript + Prisma + Auth.js Server is running!'));
 
