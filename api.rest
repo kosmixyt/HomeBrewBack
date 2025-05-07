@@ -1,0 +1,18 @@
+### Test Home
+GET http://localhost:3000/
+
+### Test Auth (remplacer par la bonne route d'auth si besoin)
+GET http://localhost:3000/auth/session
+
+### Get user profile (nécessite authentification)
+GET http://localhost:3000/users/profile
+Authorization: Bearer {{token}}
+
+### Update user profile (nécessite authentification)
+PUT http://localhost:3000/users/profile
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "name": "Nouveau Nom"
+}
