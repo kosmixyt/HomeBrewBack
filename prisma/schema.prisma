@@ -80,11 +80,14 @@ model Authenticator {
 }
 
 model SshCredential {
-  id     String  @id @default(cuid())
-  User   User?   @relation(fields: [userId], references: [id])
-  userId String?
+  id       String  @id @default(cuid())
+  User     User?   @relation(fields: [userId], references: [id])
+  userId   String?
+  name     String // Add this line for a display name
   username String
   password String
   host     String
   port     Int
+
+  @@unique([userId, name]) // Optional: ensure unique name per user
 }

@@ -13,4 +13,15 @@ export const authConfig = {
       clientSecret: process.env.DISCORD_CLIENT_SECRET as string,
     }),
   ],
+  callbacks: {
+    // @ts-ignore
+    async session({ session, user }) {
+      if (session.user) {
+        session.user.id = user.id;
+        session.user.email = user.email; // Ensure email is on session.user
+        session.user.name = user.name;   // Ensure name is on session.user
+      }
+      return session;
+    },
+  },
 };

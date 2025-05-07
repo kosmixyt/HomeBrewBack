@@ -1,19 +1,16 @@
-import express, { Request, Response} from 'express';
+import express, { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
-import {  getSession } from '@auth/express';
 import { authenticatedUser } from '../utils/session';
-import { authConfig, prisma } from '../utils/config.auth';
+import { prisma } from '../utils/config.auth';
 
 const router = express.Router();
 
-router.get('/profile', authenticatedUser, async (req : Request, res : Response) => {
+router.get('/profile', authenticatedUser, async (req: Request, res: Response) => {
   try {
-    const session = await getSession(req, authConfig);
-    if (!session?.user?.email) {
-      return res.status(401).json({ message: 'Authentication required' });
-    }
+    const authUser = req.res!.locals.authUser!; // Non-null assertion as middleware guarantees it
+
     const user = await prisma.user.findUnique({
-      where: { email: session.user.email },
+      where: { email: authUser.email! }, // Use email from authUser
       select: {
         id: true,
         email: true,
@@ -34,13 +31,14 @@ router.get('/profile', authenticatedUser, async (req : Request, res : Response) 
 // PUT /users/profile - met à jour le nom de l'utilisateur connecté
 router.put('/profile', authenticatedUser, async (req, res) => {
   try {
-    const session = await getSession(req, authConfig);
-    if (!session?.user?.email) {
-      return res.status(401).json({ message: 'Authentication required' });
-    }
+    const authUser = req.res!.locals.authUser!; // Non-null assertion
+
     const { name } = req.body;
+    if (typeof name !== 'string') {
+      return res.status(400).json({ message: 'Name must be a string.' });
+    }
     const updatedUser = await prisma.user.update({
-      where: { email: session.user.email },
+      where: { email: authUser.email! }, // Use email from authUser
       data: { name },
       select: {
         id: true,

@@ -1,5 +1,5 @@
 import express, { NextFunction, Request as ExpressRequest } from 'express'; // Modified import
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, SshCredential } from '@prisma/client';
 import dotenv from 'dotenv';
 import { router as userRoutes } from './routes/user';
 import { ExpressAuth, getSession } from '@auth/express';
@@ -7,7 +7,10 @@ import http from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import { authConfig, prisma } from './utils/config.auth';
 import tls from 'tls'; // Added import
-import { SshClientRequest } from './ws/connection';
+import { SshClientRequest } from './ws/Sshconnection';
+import { getSessionFromRequest } from './utils/session';
+import { sshRouter } from './routes/ssh/route'; // Import the sshRouter
+import { sftpRouter } from './routes/ssh/sftp'; // Import the sftpRouter
 
 dotenv.config();
 
@@ -29,50 +32,48 @@ app.use((req, res, next) => {
   next();
 })
 
-io.on('connection', async (socket) => {
-  const { headers } = socket.request;
-  const host = headers.host;
-  let protocol = 'http';
-  if ((socket.request.connection as tls.TLSSocket).encrypted) {
-    protocol = 'https';
-  }
-  const forwardedProtoHeader = headers['x-forwarded-proto'];
-  if (typeof forwardedProtoHeader === 'string') {
-    protocol = forwardedProtoHeader.split(',')[0].trim();
-  }
-
-  const mockExpressRequest = {
-    headers: headers, // Provides req.headers.cookie for getSession
-    protocol: protocol, // Provides req.protocol for getSession
-    get: (name: string): string | undefined => { // Provides req.get(name) for getSession
-      if (name.toLowerCase() === 'host') {
-        return host;
-      }
-      // Express's req.get() also normalizes other header names to lowercase.
-      // This simplified version covers 'host' and direct lowercase access.
-      return headers[name.toLowerCase()] as string | undefined;
-    },
-    // Add other Express.Request properties if getSession implementation were to need them.
-    // Based on @auth/express source, `req.protocol`, `req.get("host")`,
-    // and `req.headers.cookie` are the primary needs.
-  } as ExpressRequest; // Type assertion to satisfy getSession's parameter type
-
-  const session = await getSession(mockExpressRequest, authConfig);
-  console.log('A user connected via Socket.IO:', socket.id, session);
-  if(!session) {
-    console.log("Session not found, disconnecting socket");
+io.of("/ssh").on("connection", async (socket) => {
+  const session = await getSessionFromRequest(socket.request);
+  if (!session) {
+    console.log(`SSH Socket ${socket.id} not authenticated`);
+    socket.emit('ssh-error', 'Unauthorized access. Please log in.');
     socket.disconnect();
     return;
   }
-});
-io.of("/ssh").on("connection", (socket) => {
-  
-  // Do not connect immediately. Wait for client to send initial dimensions.
-  const sshClient = new SshClientRequest(socket, {
-} as any);
-
+  console.log(`SSH Socket ${socket.id} authenticated`);
+  try {
+    var credentials = await prisma.sshCredential.findUnique({
+      where: {
+        id: socket.handshake.query.id as string,
+        AND: {
+          User: {
+            // @ts-ignore
+            id: session.user.id,
+          }
+        }
+      },
+      include: {
+        User: true,
+      }
+    });
+    if (!credentials) {
+      // @ts-ignore
+      console.log(`SSH Socket ${socket.id} invalid credentials id=${socket.handshake.query.id} user_id=${session.user!.id}`);
+      socket.emit('ssh-error', 'Invalid SSH credentials.');
+      socket.disconnect();
+      return;
+    }
+    console.log(`SSH Socket ${socket.id} connected with credentials:`, credentials.id);
+  }
+  catch (error) {
+    console.error(`Error fetching SSH credentials for socket ${socket.id}:`, error);
+    socket.emit('ssh-error', 'Error fetching SSH credentials.');
+    socket.disconnect();
+    return;
+  }
+  const sshClient = new SshClientRequest(socket, credentials);
   socket.on('ssh-init', (data: { cols: number, rows: number }) => {
-    console.log(`Received ssh-init from ${socket.id} with dimensions:`, data);
+    console.log(`Received ssh-init`);
     if (data && typeof data.cols === 'number' && typeof data.rows === 'number') {
       sshClient.startShell(data.cols, data.rows);
     } else {
@@ -80,11 +81,9 @@ io.of("/ssh").on("connection", (socket) => {
       socket.disconnect();
     }
   });
-  console.log(`SSH client ${socket.id} connected`);
-
+  console.log(`SSH client ${socket.id} connected, 'ssh-init' listener attached.`); // Modified log
   socket.on('disconnect', (reason) => {
     console.log(`SSH client ${socket.id} disconnected: ${reason}`);
-    // sshClient.SshConnection.end(); // SshClientRequest should handle its own cleanup on socket events or errors
   });
 });
 
@@ -92,7 +91,10 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 app.use('/users', userRoutes);
-app.use("/auth/*",  ExpressAuth(authConfig))
+app.use("/auth/*", ExpressAuth(authConfig));
+app.use('/api/ssh-credentials', sshRouter); // Add this line to mount the SSH credentials API
+app.use('/api/sftp', sftpRouter); // Add this line to mount the SFTP API
+
 app.get('/', (req, res) => res.send('Express + TypeScript + Prisma + Auth.js Server is running!'));
 
 const PORT = process.env.PORT || 3000;
