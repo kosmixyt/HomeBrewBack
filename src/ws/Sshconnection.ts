@@ -38,10 +38,10 @@ export class SshClientRequest {
 
     async startShell(initialCols: number, initialRows: number) {
         if (this.isReconnecting) return;
-        
+        this.isReconnecting = true;
         try {
-            this.isReconnecting = true;
             this.sshClientInstance = await this.manager.getSshClient(this.credentials);
+            this.reconnectAttempts = 0; // Remet à zéro après succès
 
             console.log(`SSH Connection for ${this.credentials.username}@${this.credentials.host} obtained. Opening PTY...`);
 
@@ -49,15 +49,21 @@ export class SshClientRequest {
             await new Promise(resolve => setTimeout(resolve, 100));
             
             // Nouveau timeout pour l'ouverture du shell
-            const shellTimeout = 10000; // 10 secondes
+            const shellTimeout = 1000; // 10 secondes
             let timeoutHandle: NodeJS.Timeout;
 
             const stream = await new Promise<ClientChannel>((resolve, reject) => {
+                console.log("sshClientInstance");
                 timeoutHandle = setTimeout(() => {
+                    console.log(`Échec de l'ouverture du shell après ${shellTimeout}ms`);
                     reject(new Error(`Échec de l'ouverture du shell après ${shellTimeout}ms`));
                 }, shellTimeout);
 
-                this.sshClientInstance!.shell(
+                if(!this.sshClientInstance){
+                    reject(new Error('SSH client not found'));
+                    return;
+                }
+                this.sshClientInstance.shell(
                     { rows: initialRows, cols: initialCols, term: 'xterm-256color' },
                     (err, stream) => {
                         console.log(`Stream obtenu pour socket ${this.socket.id}`);
@@ -108,10 +114,11 @@ export class SshClientRequest {
 
         } catch (error: any) {
             console.error(`Échec de l'ouverture du shell:`, error);
-            this.socket.emit("ssh-error", `Erreur de connexion: ${error.message}`);
+            if (this.socket.connected) {
+                this.socket.emit("ssh-error", `Erreur de connexion: ${error.message}`);
+            }
             this.manager.releaseUsage(this.credentials);
             this.sshClientInstance = null;
-            
             if (this.reconnectAttempts < 3) {
                 this.reconnectAttempts++;
                 setTimeout(() => {

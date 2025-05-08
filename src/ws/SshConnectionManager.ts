@@ -1,5 +1,6 @@
 import { SshCredential } from "@prisma/client";
 import { Client } from "ssh2";
+import childProcess from "child_process";
 import Dockerode from "dockerode";
 import net from "net";
 import { CheckSetupDocker, DockerCertificates, GetCertificates } from "../utils/dockerSetup";
@@ -15,12 +16,20 @@ interface ManagedConnection {
   dockerodePromise?: Promise<Dockerode>; // Promise for ongoing Dockerode setup
 }
 
+interface DockerConnection {
+  dockerode: Dockerode;
+  sshProcess?: childProcess.ChildProcess;
+  port: number;
+}
+
 export class SshConnectionManager {
   private static instance: SshConnectionManager;
   private connections: Map<string, ManagedConnection>;
+  private dockerConnections: Map<string, DockerConnection>; // Stockage persistant des connexions Docker
 
   private constructor() {
     this.connections = new Map();
+    this.dockerConnections = new Map();
   }
 
   public static getInstance(): SshConnectionManager {
@@ -156,28 +165,26 @@ export class SshConnectionManager {
   }
 
   public async getDockerode(credentials: SshCredential): Promise<Dockerode> {
-    const sshClient = await this.getSshClient(credentials);
+    // Vérifier si on a déjà une connexion Docker pour cet hôte
     const key = this.getConnectionKey(credentials);
+    const existingDocker = this.dockerConnections.get(key);
+    
+    if (existingDocker) {
+      console.log(`[Manager] Reusing persistent Dockerode instance for ${key}`);
+      return existingDocker.dockerode;
+    }
+
+    // Sinon, créer une nouvelle connexion SSH et Docker
+    await this.getSshClient(credentials);
     const managedConn = this.connections.get(key);
 
-    if (
-      !managedConn ||
-      managedConn.client !== sshClient ||
-      managedConn.status !== "ready"
-    ) {
+    if (!managedConn || managedConn.status !== "ready") {
       console.error(
-        `[Manager] Inconsistency after getSshClient for ${key}. Status: ${managedConn?.status}. Re-throwing error.`
+        `[Manager] Inconsistency after getSshClient for ${key}. Status: ${managedConn?.status}.`
       );
       throw new Error(
         `Failed to establish a consistent SSH client state for Dockerode for ${key}`
       );
-    }
-
-    if (managedConn.dockerode) {
-      console.log(
-        `[Manager] Reusing Dockerode instance for ${key} on local port`
-      );
-      return managedConn.dockerode;
     }
 
     if (managedConn.dockerodePromise) {
@@ -185,66 +192,50 @@ export class SshConnectionManager {
       return managedConn.dockerodePromise;
     }
 
-    console.log(
-      `[Manager] Creating new Dockerode instance for ${key}. Setting up SSH port forwarding.`
-    );
-    const dockerodeSetupPromise = new Promise<Dockerode>(
-      async (resolveDockerode, rejectDockerode) => {
-        try {
-          
-          // Vérification et configuration Docker distante
-          const DockerSetuped = await CheckSetupDocker(sshClient)
-          console.log(`[Manager] Docker déjà configuré pour ${key}: ${DockerSetuped}`);
-          if (!DockerSetuped) {
-            console.log(`[Manager] Configuration Docker distante pour ${key}`);
-            const certs : DockerCertificates = await GetCertificates(credentials, sshClient);
-            await ConfigureRemoteDocker(sshClient, certs);
-          }else{
-            console.log(`[Manager] Docker déjà configuré pour ${key}`);
-          }
+    const dockerodeSetupPromise = new Promise<Dockerode>(async (resolveDockerode, rejectDockerode) => {
+      try {
+        const randomPort = Math.floor(Math.random() * 10000) + 2375;
+        console.log(`[Manager] Starting SSH port forwarding for Docker on ${key} (port ${randomPort})`);
+        
+        const proc = childProcess.spawn('ssh', [
+          "-NL", `${randomPort}:/var/run/docker.sock`,
+          "-i", "C:/Users/flocl/Desktop/keys/main",
+          `${credentials.username}@${credentials.host}`, "-p", `${credentials.port}`
+        ], {
+          stdio: ['ignore', 'pipe', 'pipe']
+        });
+        
+        proc.on('error', (err) => {
+          console.error(`[Manager] SSH forwarding error for ${key}:`, err);
+          rejectDockerode(new Error(`SSH port forwarding failed: ${err.message}`));
+        });
 
-          // Configuration Dockerode avec les certificats clients
-          const paths = [
-            `./certs/${credentials.id}/ca.pem`,
-            `./certs/${credentials.id}/cert.pem`,
-            `./certs/${credentials.id}/key.pem`,
-          ]
-          for(const path of paths){
-            if(!fs.existsSync(path)){
-              throw new Error(`[Manager] Certificat Docker manquant pour ${path}`);
-            }
-          } 
-          const docker = new Dockerode({
-            protocol: 'https',
-            host: credentials.host,
-            port: 2376,
-            ca: fs.readFileSync(paths[0]),
-            cert: fs.readFileSync(paths[1]),
-            key: fs.readFileSync(paths[2]),
-            timeout: 60000
-          });
-          console.log(credentials.host)
-
-          docker
-            .ping()
-            .then(() => {
-              console.log(
-                `[Manager] Docker ping successful for ${key}. Connection verified.`
-              );
-              managedConn.dockerode = docker;
-              resolveDockerode(docker);
-            })
-            .catch((pingErr) => {
-              console.error(`[Manager] Docker ping failed for ${key}:`, pingErr);
-              rejectDockerode(
-                new Error(`Docker connection test failed: ${pingErr.message}`)
-              );
-            });
-        } catch (error) {
-          rejectDockerode(error);
-        }
+        // Attendre que le tunnel soit établi
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        const docker = new Dockerode({
+          protocol: 'http',
+          host: 'localhost',
+          port: randomPort,
+        });
+        
+        // Stocker la connexion Docker de manière persistante
+        this.dockerConnections.set(key, {
+          dockerode: docker,
+          sshProcess: proc,
+          port: randomPort
+        });
+        
+        console.log(`[Manager] Docker connection established for ${key} on port ${randomPort}`);
+        managedConn.dockerode = docker;
+        resolveDockerode(docker);
+      } catch (error) {
+        console.error(`[Manager] Docker setup failed for ${key}:`, error);
+        managedConn.dockerodePromise = undefined;
+        rejectDockerode(error);
       }
-    );
+    });
+    
     managedConn.dockerodePromise = dockerodeSetupPromise;
     return dockerodeSetupPromise;
   }
@@ -252,7 +243,6 @@ export class SshConnectionManager {
   public releaseUsage(credentials: SshCredential): void {
     const key = this.getConnectionKey(credentials);
     const managedConn = this.connections.get(key);
-
     if (managedConn && managedConn.status === "ready") {
       managedConn.usageCount = Math.max(0, managedConn.usageCount - 1);
       console.log(
@@ -260,9 +250,10 @@ export class SshConnectionManager {
       );
       
       if (managedConn.usageCount === 0) {
-        console.log(`[Manager] Fermeture connexion inutilisée ${key}`);
+        console.log(`[Manager] Fermeture connexion SSH inutilisée ${key}`);
         managedConn.client.end();
         this.connections.delete(key);
+        // Ne pas supprimer la connexion Docker, elle reste persistante
       }
     } else if (managedConn) {
       console.warn(
