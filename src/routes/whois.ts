@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { authConfig } from '../utils/config.auth';
 import { getSession } from '@auth/express';
 import axios from 'axios';
+import Dockerode from 'dockerode';
 
 const router = Router();
 

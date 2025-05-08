@@ -13,6 +13,7 @@ import { sshRouter } from './routes/ssh/route'; // Import the sshRouter
 import { sftpRouter } from './routes/ssh/sftp'; // Import the sftpRouter
 import { router as linksRouter } from './routes/links'; // Import the linksRouter
 import { whoisRouter } from './routes/whois'; // Import the whoisRouter
+import { dockerRouter } from './routes/docker/containers'; // Import the new dockerRouter
 
 dotenv.config();
 
@@ -99,6 +100,7 @@ app.use('/api/ssh-credentials', sshRouter); // Add this line to mount the SSH cr
 app.use('/api/sftp', sftpRouter); // Add this line to mount the SFTP API
 app.use('/api/links', linksRouter); // Add this line to mount the Links API
 app.use('/api/whois', whoisRouter); // Ajouter cette ligne pour monter la nouvelle API WHOIS
+app.use('/api/docker', dockerRouter); // Add this line to mount the Docker API
 
 app.get('/', (req, res) => res.send('Express + TypeScript + Prisma + Auth.js Server is running!'));
 
